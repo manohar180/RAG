@@ -10,6 +10,9 @@ export const config = {
     url: process.env.QDRANT_URL || "http://localhost:6333",
     apiKey: process.env.QDRANT_API_KEY || undefined,
   },
+  nomic: {
+    apiKey: process.env.NOMIC_API_KEY || "",
+  },
   ollama: {
     url: process.env.OLLAMA_URL || "http://localhost:11434",
     embedModel: process.env.EMBED_MODEL || "nomic-embed-text",
