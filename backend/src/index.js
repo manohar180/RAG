@@ -13,7 +13,13 @@ mkdirSync(path.join(__dirname, "../../uploads"), { recursive: true });
 
 const app = express();
 
-app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:5173" }));
+app.use(cors({
+  origin: [
+    process.env.FRONTEND_URL || "http://localhost:5173",
+    "http://localhost:5173",
+  ],
+  methods: ["GET", "POST"],
+}));
 app.use(express.json());
 
 // Health check
