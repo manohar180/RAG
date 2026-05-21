@@ -8,7 +8,6 @@ import { chunkDocument } from "../services/chunker.js";
 import { embedBatch } from "../services/embedder.js";
 import { ensureCollection, upsertChunks } from "../services/vectorStore.js";
 
-// pdf-parse 1.1.1 is CJS — must use createRequire in ESM project
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 
@@ -42,49 +41,66 @@ router.post("/", upload.single("file"), async (req, res) => {
   const ext = path.extname(fileName).toLowerCase();
 
   try {
-    // 1. Extract text
     let text = "";
     let pageMap = [];
 
     if (ext === ".pdf") {
       const buffer = await fs.readFile(filePath);
+
+      // Step 1: capture per-page text using pagerender callback
+      const pageTexts = [];
+      await pdfParse(buffer, {
+        pagerender: function (pageData) {
+          return pageData.getTextContent().then(function (textContent) {
+            const pageText = textContent.items.map((i) => i.str).join(" ");
+            pageTexts.push(pageText.trim());
+          });
+        },
+      });
+
+      // Step 2: parse again normally to get the full combined text
       const parsed = await pdfParse(buffer);
       text = parsed.text;
 
-      // Build page map
-      let charOffset = 0;
-      const pages = parsed.text.split("\f");
-      pages.forEach((pageText, idx) => {
-        pageMap.push({
-          pageNum: idx + 1,
-          startChar: charOffset,
-          endChar: charOffset + pageText.length,
+      // Step 3: build accurate pageMap from per-page texts
+      if (pageTexts.length > 0) {
+        let charOffset = 0;
+        pageTexts.forEach((pageText, idx) => {
+          pageMap.push({
+            pageNum: idx + 1,
+            startChar: charOffset,
+            endChar: charOffset + pageText.length,
+          });
+          charOffset += pageText.length + 1;
         });
-        charOffset += pageText.length + 1;
-      });
+        console.log(`✓ Page map built: ${pageTexts.length} pages detected`);
+      } else {
+        console.warn("⚠ Could not detect pages, chunk numbers will be used instead");
+      }
+
     } else {
       text = await fs.readFile(filePath, "utf-8");
     }
 
     if (!text.trim()) {
-      return res.status(422).json({ error: "Could not extract text from file. Is the PDF scanned/image-based?" });
+      return res.status(422).json({ error: "Could not extract text. Is the PDF scanned/image-based?" });
     }
 
-    // 2. Chunk
+    // Chunk
     const chunks = chunkDocument(text, docId, pageMap);
     console.log(`✓ Chunked into ${chunks.length} pieces`);
 
-    // 3. Embed
-    console.log("Embedding chunks (this may take a moment)...");
+    // Embed
+    console.log("Embedding chunks...");
     const texts = chunks.map((c) => c.text);
     const embeddings = await embedBatch(texts);
     console.log(`✓ Embedded ${embeddings.length} chunks`);
 
-    // 4. Store
+    // Store
     const collectionName = `doc_${docId.replace(/-/g, "_")}`;
     await ensureCollection(collectionName);
     await upsertChunks(collectionName, chunks, embeddings);
-    console.log(`✓ Stored in Qdrant collection: ${collectionName}`);
+    console.log(`✓ Stored in Qdrant: ${collectionName}`);
 
     res.json({
       docId,
@@ -94,8 +110,7 @@ router.post("/", upload.single("file"), async (req, res) => {
       wordCount: text.split(/\s+/).filter(Boolean).length,
     });
   } catch (err) {
-    // Log the FULL error so you can see exactly what failed
-    console.error("Upload pipeline error:", err);
+    console.error("Upload error:", err);
     res.status(500).json({
       error: err.message || "Ingestion failed",
       hint: getHint(err.message),
@@ -105,12 +120,11 @@ router.post("/", upload.single("file"), async (req, res) => {
   }
 });
 
-// Give helpful hints based on common errors
 function getHint(msg = "") {
   if (msg.includes("ECONNREFUSED") && msg.includes("11434"))
-    return "Ollama is not running. Start it with: ollama serve";
+    return "Ollama is not running. Run: ollama serve";
   if (msg.includes("ECONNREFUSED") && msg.includes("6333"))
-    return "Qdrant is not running. Start it with: docker run -p 6333:6333 qdrant/qdrant";
+    return "Qdrant is not running.";
   if (msg.includes("model") && msg.includes("not found"))
     return "Run: ollama pull nomic-embed-text";
   return null;
