@@ -38,6 +38,7 @@ router.post("/", async (req, res) => {
     send("sources", {
       sources: chunks.map((c) => ({
         pageNum: c.metadata.pageNum,
+        pageLabel: c.metadata.pageLabel,
         chunkIndex: c.metadata.chunkIndex,
         score: Math.round(c.score * 100),
         preview: c.text.slice(0, 120) + "…",

@@ -32,8 +32,13 @@ export function chunkDocument(text, docId, pageMap = []) {
   while (i < words.length) {
     const slice = words.slice(i, i + chunkSize);
     const chunkText = slice.join(" ");
+
+    // Calculate character offset for this chunk
     const charStart = words.slice(0, i).join(" ").length;
-    const pageNum = resolvePageNumber(charStart, pageMap);
+    const charEnd = charStart + chunkText.length;
+
+    // Resolve page number from map, null if not determinable
+    const pageNum = resolvePageNumber(charStart, charEnd, pageMap);
 
     chunks.push({
       id: `${docId}_chunk_${chunkIndex}`,
@@ -41,7 +46,8 @@ export function chunkDocument(text, docId, pageMap = []) {
       metadata: {
         docId,
         chunkIndex,
-        pageNum,
+        pageNum,                        // null if page detection failed
+        pageLabel: pageNum ? `Page ${pageNum}` : `Chunk ${chunkIndex + 1}`,
         wordStart: i,
         wordEnd: i + slice.length,
         totalWords: words.length,
@@ -49,18 +55,31 @@ export function chunkDocument(text, docId, pageMap = []) {
     });
 
     chunkIndex++;
-    i += chunkSize - chunkOverlap; // slide forward with overlap
+    i += chunkSize - chunkOverlap;
   }
 
   return chunks;
 }
 
-function resolvePageNumber(charOffset, pageMap) {
+/**
+ * Find which page a character offset belongs to.
+ * Returns null if pageMap is empty or offset doesn't match any page.
+ * Returning null lets the UI fall back to showing chunk number
+ * instead of showing a wrong page number.
+ */
+function resolvePageNumber(charStart, charEnd, pageMap) {
   if (!pageMap.length) return null;
+
+  // Find the page where the MIDDLE of the chunk falls
+  // More accurate than using just the start character
+  const charMid = Math.floor((charStart + charEnd) / 2);
+
   for (const page of pageMap) {
-    if (charOffset >= page.startChar && charOffset < page.endChar) {
+    if (charMid >= page.startChar && charMid < page.endChar) {
       return page.pageNum;
     }
   }
-  return pageMap[pageMap.length - 1].pageNum;
+
+  // No match found — return null so UI shows chunk number instead
+  return null;
 }
