@@ -32,6 +32,63 @@ const upload = multer({
   },
 });
 
+/**
+ * Extract text per page from a PDF buffer.
+ * Returns { text, pageMap }
+ * - text: full document text (pages joined by space)
+ * - pageMap: [{pageNum, startChar, endChar}]
+ */
+async function extractPdfContent(buffer) {
+  const pageTexts = [];
+
+  // Collect each page's text via pagerender
+  await new Promise((resolve, reject) => {
+    pdfParse(buffer, {
+      pagerender: function (pageData) {
+        return pageData
+          .getTextContent()
+          .then(function (textContent) {
+            const pageText = textContent.items
+              .map((item) => item.str)
+              .join(" ")
+              .replace(/\s+/g, " ")
+              .trim();
+            pageTexts.push(pageText);
+          });
+      },
+    }).then(resolve).catch(reject);
+  });
+
+  if (pageTexts.length === 0) {
+    // pagerender failed — fall back to raw text, no page map
+    const parsed = await pdfParse(buffer);
+    return { text: parsed.text, pageMap: [] };
+  }
+
+  // Build full text and accurate pageMap from the SAME source
+  const pageMap = [];
+  let charOffset = 0;
+
+  for (let i = 0; i < pageTexts.length; i++) {
+    const pageText = pageTexts[i];
+    pageMap.push({
+      pageNum: i + 1,
+      startChar: charOffset,
+      endChar: charOffset + pageText.length,
+    });
+    charOffset += pageText.length + 1; // +1 for the space between pages
+  }
+
+  const fullText = pageTexts.join(" ");
+
+  console.log(`✓ Extracted ${pageTexts.length} pages, ${fullText.length} chars`);
+  pageMap.forEach((p) =>
+    console.log(`  Page ${p.pageNum}: chars ${p.startChar}–${p.endChar}`)
+  );
+
+  return { text: fullText, pageMap };
+}
+
 router.post("/", upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
@@ -46,49 +103,25 @@ router.post("/", upload.single("file"), async (req, res) => {
 
     if (ext === ".pdf") {
       const buffer = await fs.readFile(filePath);
-
-      // Step 1: capture per-page text using pagerender callback
-      const pageTexts = [];
-      await pdfParse(buffer, {
-        pagerender: function (pageData) {
-          return pageData.getTextContent().then(function (textContent) {
-            const pageText = textContent.items.map((i) => i.str).join(" ");
-            pageTexts.push(pageText.trim());
-          });
-        },
-      });
-
-      // Step 2: parse again normally to get the full combined text
-      const parsed = await pdfParse(buffer);
-      text = parsed.text;
-
-      // Step 3: build accurate pageMap from per-page texts
-      if (pageTexts.length > 0) {
-        let charOffset = 0;
-        pageTexts.forEach((pageText, idx) => {
-          pageMap.push({
-            pageNum: idx + 1,
-            startChar: charOffset,
-            endChar: charOffset + pageText.length,
-          });
-          charOffset += pageText.length + 1;
-        });
-        console.log(`✓ Page map built: ${pageTexts.length} pages detected`);
-      } else {
-        console.warn("⚠ Could not detect pages, chunk numbers will be used instead");
-      }
-
+      const result = await extractPdfContent(buffer);
+      text = result.text;
+      pageMap = result.pageMap;
     } else {
       text = await fs.readFile(filePath, "utf-8");
     }
 
     if (!text.trim()) {
-      return res.status(422).json({ error: "Could not extract text. Is the PDF scanned/image-based?" });
+      return res.status(422).json({
+        error: "Could not extract text. Is the PDF scanned/image-based?",
+      });
     }
 
     // Chunk
     const chunks = chunkDocument(text, docId, pageMap);
     console.log(`✓ Chunked into ${chunks.length} pieces`);
+    chunks.slice(0, 3).forEach((c) =>
+      console.log(`  Chunk ${c.metadata.chunkIndex}: ${c.metadata.pageLabel}`)
+    );
 
     // Embed
     console.log("Embedding chunks...");
@@ -122,9 +155,9 @@ router.post("/", upload.single("file"), async (req, res) => {
 
 function getHint(msg = "") {
   if (msg.includes("ECONNREFUSED") && msg.includes("11434"))
-    return "Ollama is not running. Run: ollama serve";
+    return "Ollama not running. Run: ollama serve";
   if (msg.includes("ECONNREFUSED") && msg.includes("6333"))
-    return "Qdrant is not running.";
+    return "Qdrant not running.";
   if (msg.includes("model") && msg.includes("not found"))
     return "Run: ollama pull nomic-embed-text";
   return null;
