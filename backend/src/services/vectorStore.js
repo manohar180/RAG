@@ -1,41 +1,27 @@
+import { QdrantClient } from "@qdrant/js-client-rest";
 import { config } from "../config/index.js";
 import { getVectorDimension } from "./embedder.js";
 
-const BASE = config.qdrant.url.replace(/\/$/, ""); // remove trailing slash
-const HEADERS = {
-  "Content-Type": "application/json",
-  ...(config.qdrant.apiKey ? { "api-key": config.qdrant.apiKey } : {}),
-};
-
-async function qdrantFetch(path, method = "GET", body = null) {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: HEADERS,
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Qdrant ${method} ${path} → ${res.status}: ${text}`);
-  }
-
-  return res.json();
-}
+const client = new QdrantClient({
+  url: config.qdrant.url,
+  apiKey: config.qdrant.apiKey,
+  checkCompatibility: false,
+});
 
 export async function ensureCollection(collectionName) {
-  // Check if exists
-  const exists = await fetch(`${BASE}/collections/${collectionName}`, {
-    headers: HEADERS,
-  }).then((r) => r.ok).catch(() => false);
+  const exists = await client
+    .getCollection(collectionName)
+    .then(() => true)
+    .catch(() => false);
 
   if (!exists) {
-    await qdrantFetch(`/collections/${collectionName}`, "PUT", {
+    await client.createCollection(collectionName, {
       vectors: {
         size: getVectorDimension(),
         distance: "Cosine",
       },
     });
-    console.log(`✓ Created Qdrant collection: ${collectionName}`);
+    console.log(`✓ Created collection: ${collectionName}`);
   }
 }
 
@@ -49,23 +35,17 @@ export async function upsertChunks(collectionName, chunks, embeddings) {
     },
   }));
 
-  await qdrantFetch(`/collections/${collectionName}/points?wait=true`, "PUT", {
-    points,
-  });
+  await client.upsert(collectionName, { wait: true, points });
 }
 
 export async function searchChunks(collectionName, queryEmbedding, topK) {
-  const data = await qdrantFetch(
-    `/collections/${collectionName}/points/search`,
-    "POST",
-    {
-      vector: queryEmbedding,
-      limit: topK,
-      with_payload: true,
-    }
-  );
+  const results = await client.search(collectionName, {
+    vector: queryEmbedding,
+    limit: topK,
+    with_payload: true,
+  });
 
-  return data.result.map((r) => ({
+  return results.map((r) => ({
     text: r.payload.text,
     score: r.score,
     metadata: {
@@ -77,10 +57,10 @@ export async function searchChunks(collectionName, queryEmbedding, topK) {
 }
 
 export async function deleteCollection(collectionName) {
-  await qdrantFetch(`/collections/${collectionName}`, "DELETE");
+  await client.deleteCollection(collectionName);
 }
 
 export async function listCollections() {
-  const data = await qdrantFetch("/collections");
-  return data.result.collections.map((c) => c.name);
+  const res = await client.getCollections();
+  return res.collections.map((c) => c.name);
 }
