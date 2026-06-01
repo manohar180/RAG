@@ -11,9 +11,13 @@ import { QdrantClient } from "@qdrant/js-client-rest";
 import { config } from "../config/index.js";
 import { getVectorDimension } from "./embedder.js";
 
+const isCloud = config.qdrant.url.startsWith("https");
+
 const client = new QdrantClient({
   url: config.qdrant.url,
+  port: isCloud ? 443 : 6333,
   ...(config.qdrant.apiKey ? { apiKey: config.qdrant.apiKey } : {}),
+  checkCompatibility: false,
 });
 
 /**
