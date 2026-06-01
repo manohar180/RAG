@@ -1,6 +1,20 @@
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
+// Wake up Render's free tier server before uploading
+async function wakeUpServer() {
+  try {
+    await fetch(`${BASE}/api/health`, {
+      signal: AbortSignal.timeout(60000), // wait up to 60s for cold start
+    });
+  } catch {
+    // ignore — just a best-effort ping
+  }
+}
+
 export async function uploadDocument(file, onProgress) {
+  // Ping health endpoint first so Render wakes up before the real request
+  await wakeUpServer();
+
   const formData = new FormData();
   formData.append("file", file);
 
@@ -60,7 +74,7 @@ export function streamChat({ question, collectionName, fileName, history }, { on
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
-      buffer = lines.pop(); // keep incomplete line
+      buffer = lines.pop();
 
       let currentEvent = null;
       for (const line of lines) {
