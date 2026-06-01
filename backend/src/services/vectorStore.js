@@ -2,11 +2,19 @@ import { QdrantClient } from "@qdrant/js-client-rest";
 import { config } from "../config/index.js";
 import { getVectorDimension } from "./embedder.js";
 
+// Pass host separately — using `url` param causes client to append :6333
+const qdrantUrl = new URL(config.qdrant.url);
+const isCloud = qdrantUrl.protocol === "https:";
+
 const client = new QdrantClient({
-  url: config.qdrant.url,
+  host: qdrantUrl.hostname,
+  port: isCloud ? 443 : 6333,
+  https: isCloud,
   apiKey: config.qdrant.apiKey,
   checkCompatibility: false,
 });
+
+console.log(`Qdrant connecting to: ${qdrantUrl.hostname}:${isCloud ? 443 : 6333}`);
 
 export async function ensureCollection(collectionName) {
   const exists = await client
